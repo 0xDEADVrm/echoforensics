@@ -1,0 +1,396 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning}
+\usepackage[hidelinks]{hyperref}
+
+% Placeholder: a value that must be supplied by the authors before submission
+\newcommand{\tbd}[1]{\textcolor{red}{\textbf{[#1]}}}
+
+\begin{document}
+
+\title{EchoForensics: A Zero-Trust Framework for\\
+Verifiable Wi-Fi CSI-Based Physical Intrusion Detection}
+
+\author{
+\IEEEauthorblockN{Hemanth Karal Varmaa M}
+\IEEEauthorblockA{Department of CSE\\
+Panimalar Engineering College\\
+Chennai, India\\
+varmaa.org@gmail.com}
+\and
+\IEEEauthorblockN{Kevin Harry A}
+\IEEEauthorblockA{Department of CSE\\
+Panimalar Engineering College\\
+Chennai, India\\
+kevinharryorg@gmail.com}
+\and
+\IEEEauthorblockN{Hemanth D}
+\IEEEauthorblockA{Department of CSE\\
+Panimalar Engineering College\\
+Chennai, India\\
+hemznth@gmail.com}
+\and
+\IEEEauthorblockN{Dr. L. Jabasheela, M.E., Ph.D.}
+\IEEEauthorblockA{Department of CSE\\
+Panimalar Engineering College\\
+Chennai, India\\
+csehod@panimalar.ac.in}
+\and
+\IEEEauthorblockN{Dr. Shanmuganathan M.}
+\IEEEauthorblockA{Department of CSE\\
+Panimalar Engineering College\\
+Chennai, India\\
+shanmail2k@gmail.com}
+\and
+\IEEEauthorblockN{Mr. Prabbu Sankar}
+\IEEEauthorblockA{Department of CSE\\
+Panimalar Engineering College\\
+Chennai, India\\
+Prabusank.r1985@gmail.com}
+}
+
+\maketitle
+
+\begin{abstract}
+Wi-Fi Channel State Information (CSI) allows physical activity to be sensed without a device carried by the observed person. Sensing pipelines, however, usually assume that the node and software that produce CSI are trustworthy. A compromised edge node could replay recorded benign measurements, alter CSI, suppress an alarm, or modify stored evidence while the classifier appears to work normally. EchoForensics treats measurement integrity as a separate security problem from classification. We specify a zero-trust architecture with an independent verifier (phase, spectral, temporal, and challenge--response consistency checks), a classifier, and a SHA-256 hash-chained evidence ledger.
+
+We evaluate the classification and ledger components on a synthetic four-class benchmark (Empty, Benign, Intrusion, Replay/Spoof) with a group-wise, leakage-audited split, five random seeds, and a protocol fixed before the final runs. Feature-based models separate the classes well: a Random Forest on eight engineered features reaches $98.9\pm0.5\%$ accuracy and an SVM on the same features $98.5\pm0.4\%$. A CNN-BiLSTM-Attention model reaches only $82.6\pm0.9\%$ accuracy (macro one-vs-rest AUC $0.946$) and recovers just $40.7\pm3.4\%$ of Replay/Spoof windows, the very attack class motivating this work. A single engineered feature separates replay from empty windows perfectly in our diagnostics, which suggests that the synthetic replay generator contains an easily exploitable signature; we therefore do not claim real-world replay-detection capability. The hash chain detects and localises a modified record in a software test. The challenge--response verifier is an architectural proposal and is not evaluated.
+
+These results are a controlled simulation study, not evidence of field-level security.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Wi-Fi sensing, channel state information, zero-trust architecture, physical intrusion detection, replay detection, digital forensics, tamper-evident logging.
+\end{IEEEkeywords}
+
+%==================================================================
+\section{Introduction}
+Wi-Fi signals change as they propagate through objects and people. Channel State Information (CSI) captures part of this change at fine granularity, enabling activity inference without an on-body sensor. Tools for extracting CSI from commodity 802.11n hardware, notably the Intel 5300 toolchain~\cite{halperin2011}, led to work on activity recognition, localization, and motion sensing~\cite{wang2014eeyes,kotaru2015spotfi,yousefi2017,ma2019}. Security monitoring followed: PADS and Wi-Alarm showed that wireless measurements can identify moving targets and flag intrusions~\cite{qian2014pads,wang2019wialarm}, and AR-Alarm improved adaptivity and robustness~\cite{li2017aralarm}.
+
+There is a difference between detecting an event and knowing that the measurement used to detect it is genuine. CSI passes through several software stages before an alert or evidence record is produced, and their integrity is usually treated as an implementation detail. A compromised node could (i) replay an earlier benign CSI segment during an intrusion; (ii) modify amplitude or phase values; (iii) overwrite the classifier output; or (iv) edit records in the local evidence store. A more accurate classifier does not close this gap, so the security boundary must extend to the measurements, the processing path, and the derived evidence. This motivates a second question beyond ``what is happening?'': ``why should this observation be trusted?''
+
+Existing CSI intrusion-detection work focuses on sensing accuracy~\cite{qian2014pads,wang2019wialarm,li2017aralarm}. Work on security problems in CSI itself addresses single issues such as physical tampering, replay, camera looping, or adversarial perturbation~\cite{dehmollaian2020,basha2024,lakshmanan2019surfi,gopalakrishnan2025,xu2022wicam,liu2024time}. EchoForensics instead considers the whole pipeline---observation, decision, and stored evidence---as the object of verification, applying the zero-trust principle~\cite{rose2020zta,syed2022zta} to physical sensing.
+
+\textbf{Contributions.} (1) A threat model for CSI sensing pipelines with compromised collection, processing, classification, or storage components. (2) A zero-trust architecture combining a verifier specification, a classifier, and a hash-chained ledger; the verifier is specified but not evaluated. (3) A leakage-audited, five-seed synthetic evaluation of three model families whose results are reported \emph{as measured}, including a negative result for the CNN and a diagnostic showing that the benchmark is easy for simple features. (4) An explicit account of the simulation-to-hardware gap.
+
+Section~II reviews related work, Section~III the threat model, Section~IV the framework, Section~V the experimental protocol, Section~VI the results, and Sections~VII--IX the interpretation, limitations, and conclusion.
+
+%==================================================================
+\section{Related Work}
+\subsection{CSI-Based Sensing and Intrusion Detection}
+Halperin \emph{et al.}~\cite{halperin2011} released a CSI extraction toolchain for Intel 5300 NICs; Wang \emph{et al.}~\cite{wang2014eeyes} showed device-free activity identification; Kotaru \emph{et al.}~\cite{kotaru2015spotfi} showed decimeter-level localization. Surveys~\cite{yousefi2017,ma2019} cover activity recognition, localization, and healthcare, and note that CSI is strongly environment-dependent. Later platforms extended extraction to modern chipsets~\cite{gringoli2019} and smartphones~\cite{hernandez2020}, and attention-based recurrent models were applied to CSI activity recognition~\cite{chen2018ablstm}. For intrusion detection, PADS~\cite{qian2014pads} uses PHY-layer covariance and eigenvalue analysis, Wi-Alarm~\cite{wang2019wialarm} uses amplitude statistics with an SVM, and AR-Alarm~\cite{li2017aralarm} adds adaptivity to environmental change. In all three, the CSI given to the detector is treated as a faithful observation.
+
+\subsection{Security, Replay, and Tamper Detection}
+Dehmollaian \emph{et al.}~\cite{dehmollaian2020} detect physical tampering with a deep convolutional autoencoder. Basha \emph{et al.}~\cite{basha2024} study CSI-based detection of replay in authentication settings. SurFi~\cite{lakshmanan2019surfi} uses Wi-Fi CSI as independent evidence to detect surveillance-camera looping. Gopalakrishnan and Hailes~\cite{gopalakrishnan2025} evaluate the adversarial robustness of CSI sensing, WiCAM~\cite{xu2022wicam} crafts imperceptible adversarial attacks, and Liu \emph{et al.}~\cite{liu2024time} analyse threats to WiFi behaviour recognition. Duan \emph{et al.}~\cite{duan2026wiid} propose a tensor-decomposition-based indoor intrusion detector.
+
+\subsection{Explainability and Forensic Evidence}
+SHAP~\cite{lundberg2017} and Grad-CAM~\cite{selvaraju2017} are common attribution methods; this paper does not evaluate either (Section~VIII). For evidence preservation, blockchain chain-of-custody schemes have been proposed~\cite{lone2019,choudhary2023}, and forward-chained secure audit logs are a classical alternative~\cite{schneier1999}. We use a local SHA-256 hash chain, which gives tamper evidence but not multi-party non-repudiation: an attacker controlling the whole ledger could rebuild a consistent chain unless an external anchor is used.
+
+\subsection{Comparison with the Closest Prior Work}
+Table~\ref{tab:compare} compares capabilities qualitatively, based on what each publication describes. A check mark $\checkmark$ means the capability is a primary contribution of the work; $(\checkmark)$ means partial, architectural only, or evaluated only in simulation; a dash means it is not addressed. EchoForensics does \emph{not} claim better detection than these systems, which use real hardware data whereas ours is synthetic. Its distinguishing property is the single-pipeline, compromised-node threat model. Individual components are not novel.
+
+\begin{table*}[t]
+\caption{Qualitative Comparison with Closest Related Work}
+\label{tab:compare}
+\centering
+\small
+\begin{tabular}{lccccccc}
+\toprule
+Work & Intrusion & Replay & Tamper & Adversarial & Compromised- & Explain- & Evidence \\
+ & detection & detection & detection & robustness & node model & ability & integrity \\
+\midrule
+PADS~\cite{qian2014pads} & $\checkmark$ & -- & -- & -- & -- & -- & -- \\
+Wi-Alarm~\cite{wang2019wialarm} & $\checkmark$ & -- & -- & -- & -- & -- & -- \\
+AR-Alarm~\cite{li2017aralarm} & $\checkmark$ & -- & -- & -- & -- & -- & -- \\
+Dehmollaian \emph{et al.}~\cite{dehmollaian2020} & -- & -- & $\checkmark$ & -- & -- & -- & -- \\
+Basha \emph{et al.}~\cite{basha2024} & -- & $\checkmark$ & -- & -- & -- & -- & -- \\
+SurFi~\cite{lakshmanan2019surfi} & -- & $(\checkmark)$ & -- & -- & -- & -- & -- \\
+Gopalakrishnan \& Hailes~\cite{gopalakrishnan2025} & -- & -- & -- & $\checkmark$ & -- & -- & -- \\
+\midrule
+\textbf{EchoForensics (this work)} & $(\checkmark)$ & $(\checkmark)$ & -- & -- & $\checkmark$ & -- & $(\checkmark)$ \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+%==================================================================
+\section{Threat Model}
+A Wi-Fi transmitter and receiver provide CSI for activity inference. The wireless infrastructure itself is outside the attacker's control; the adversary targets the software path through which CSI is collected, processed, classified, and stored. Table~\ref{tab:attacks} lists four attack behaviours. \emph{Label suppression} overwrites the local classifier's output, so a better classifier cannot prevent it. \emph{Replay/spoofing} substitutes a recorded segment for the live channel, so an uncompromised classifier processes data that no longer reflects the environment. \emph{CSI fabrication} requires constructing measurements that resemble another physical state. \emph{Evidence modification} targets the record rather than the sensing process.
+
+\begin{table}[t]
+\caption{Adversarial Capabilities Considered}
+\label{tab:attacks}
+\centering
+\small
+\begin{tabular}{p{1.6cm}p{1.5cm}p{4.2cm}}
+\toprule
+Attack & Target & Goal \\
+\midrule
+Label suppression & Local classifier & Force an Empty or Benign output regardless of the physical state \\
+Replay/Spoofing & CSI pipeline & Substitute a previously recorded benign segment for the live measurement \\
+CSI fabrication & Raw CSI values & Modify amplitude or phase to imitate a different physical state \\
+Evidence modification & Local ledger & Alter or delete stored records before independent verification \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\emph{Exclusions.} Physical compromise of the access point, real-time RF relay attacks, and supply-chain attacks on model weights or software are excluded, as is a cryptographic break of SHA-256. The framework does not protect the whole wireless infrastructure against every radio-layer attack.
+
+\emph{Design implication.} Accuracy alone cannot establish trust: a compromised classifier's output is not an independent signal, and a correct classifier can still err on a replayed observation. EchoForensics therefore verifies before classifying; a violated consistency check is a reason to withhold trust, not proof of an attack. Hash chaining does not prevent record changes; it makes them detectable when the chain is checked against a known prior state. No single layer is presented as sufficient.
+
+\begin{figure}[t]
+\centering
+\resizebox{\columnwidth}{!}{%
+\begin{tikzpicture}[
+  box/.style={draw, rounded corners=2pt, align=center, font=\small, minimum width=7.2cm, minimum height=0.9cm, inner sep=3pt},
+  ver/.style={box, fill=gray!15},
+  arr/.style={-{Latex[length=2mm]}, thick},
+  node distance=0.55cm]
+\node[box] (a) {\textbf{1. CSI acquisition}\\Raw physical-layer channel measurements};
+\node[ver, below=of a] (b) {\textbf{2. Physical consistency verification (specified, not evaluated)}\\Phase, spectral, temporal, challenge--response checks};
+\node[box, below=of b] (c) {\textbf{3. Activity classification}\\Empty, Benign, Intrusion, Replay/Spoof};
+\node[box, below=of c] (d) {\textbf{4. Tamper-evident evidence storage}\\SHA-256 hash-chained ledger of validated events};
+\node[box, below=of d, minimum width=4cm] (e) {Alert / forensic record};
+\node[ver, right=0.6cm of b, minimum width=2.6cm, minimum height=1.2cm] (v) {Independent\\verifier\\(challenge--\\response)};
+\draw[arr] (a) -- (b);
+\draw[arr] (b) -- (c);
+\draw[arr] (c) -- (d);
+\draw[arr] (d) -- (e);
+\draw[arr, dashed] (v) -- (b);
+\end{tikzpicture}}
+\caption{EchoForensics architecture. The verifier is logically independent of the sensing node. Stages 3 and 4 are evaluated in this paper; stage 2 is not.}
+\label{fig:arch}
+\end{figure}
+
+%==================================================================
+\section{Framework}
+\subsection{Channel Model and Synthetic Surrogate}
+Conceptually, the channel at subcarrier $i$ and time $t$ is a multipath superposition,
+\begin{equation}
+H(f_i,t)=\sum_{k} a_k(t)\,\exp\!\big(-j2\pi f_i \tau_k(t)\big)+n(t),
+\label{eq:csi}
+\end{equation}
+with complex path gains $a_k(t)$, delays $\tau_k(t)$, and complex Gaussian noise $n(t)$; a human-induced path has bistatic delay $\tau_h(t)=\big(d_{Tx,h}(t)+d_{h,Rx}(t)\big)/c$. Our experiments do \emph{not} implement this model literally. They use a simplified amplitude-only surrogate (Section~V-A), so no phase information is simulated or used.
+
+\subsection{Classifiers}
+\emph{Engineered features.} Eight scalar features per window: amplitude mean, variance, skewness, excess kurtosis, mean inter-subcarrier correlation, a Doppler proxy (mean absolute first difference over time), a periodicity score (mean per-subcarrier autocorrelation at a fixed lag of 100 samples), and the maximum per-subcarrier amplitude excursion. \emph{CNN-BiLSTM-Attention.} The input is the $30\times200$ amplitude window with per-subcarrier z-scoring using training-set statistics only. Table~\ref{tab:cnn} gives the architecture (117,701 trainable parameters).
+
+\begin{table}[t]
+\caption{CNN-BiLSTM-Attention Configuration}
+\label{tab:cnn}
+\centering
+\small
+\begin{tabular}{p{1.6cm}p{5.4cm}}
+\toprule
+Layer & Configuration \\
+\midrule
+Input & 30 subcarrier channels $\times$ 200 time samples \\
+Conv1D $\times$2 & 64 filters each; kernel sizes 7 and 5; batch norm; ReLU; max pooling (2) \\
+BiLSTM & 64 hidden units per direction \\
+Attention & Additive temporal attention \\
+Dense head & Two FC layers (64 hidden); dropout 0.3 \\
+Output & Four-class softmax \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Tamper-Evident Ledger}
+Each validated event record is serialised canonically and chained as
+\begin{equation}
+h_i=\mathrm{SHA256}\big(\mathrm{payload}_i \,\|\, h_{i-1}\big),
+\label{eq:hash}
+\end{equation}
+where $\|$ is concatenation and $h_{-1}$ is a fixed genesis value ($64$ zeros). Verification recomputes the chain; a modified earlier payload changes its hash, later links diverge, and the first divergence identifies the earliest affected record. This local chain gives evidence of modifications that break the chain but not multi-party non-repudiation.
+
+\subsection{Active Verification Protocol (Specification Only)}
+The verifier would issue unpredictable sounding frames and check consistency across phase progression, temporal periodicity, Doppler characteristics, and challenge-conditioned response matching, making substitution of recorded data difficult. It is not implemented or evaluated here. A practical verifier cannot derive an exact expected CSI tensor from a challenge alone, since the channel depends on hardware and environment; it would need calibration or a learned channel model.
+
+%==================================================================
+\section{Experimental Protocol}
+\subsection{Synthetic Benchmark}
+Data are produced by a surrogate generator (30 subcarriers, 200 samples at 100\,Hz, i.e.\ 2\,s windows) that draws everything sequentially from one seeded NumPy generator. For each of 600 \emph{scene groups} it creates one window of each class:
+\begin{itemize}
+\item \textbf{Scene.} Static profile from four paths with gains $\mathcal{U}(0.25,1)$, phases $\mathcal{U}(0,2\pi)$, and per-subcarrier phase slopes $\mathcal{U}(-0.18,0.18)$, power-normalised.
+\item \textbf{Noise.} Complex Gaussian, standard deviation $0.025$ per component; the window amplitude $|H|$ is the model input.
+\item \textbf{Empty.} Static profile plus noise.
+\item \textbf{Benign.} Adds a path of gain $0.30$ whose phase follows an in-place displacement $\mathcal{U}(0.05,0.25)$\,m sinusoid at $\mathcal{U}(0.3,1.2)$\,Hz with random phase.
+\item \textbf{Intrusion.} A crossing with speed $\mathcal{U}(0.6,2.2)$\,m/s, Gaussian envelope (centre $\mathcal{U}(0.35,1.65)$\,s, width $\mathcal{U}(0.08,0.24)$\,s), moving-path gain $0.85$, and attenuation of the static path by up to $48\%$ during the crossing.
+\item \textbf{Replay/Spoof.} A segment of length $\mathcal{U}\{20,\dots,60\}$ samples (0.2--0.6\,s) is taken at a random start from the same scene's Empty or Benign window (probability $0.5$ each), tiled to 200 samples, and independent Gaussian noise (standard deviation $0.012$) is added to the amplitude.
+\end{itemize}
+The result is 2,400 windows (600 per class). The simulator omits AGC variation, CFO, phase noise, interference, and environmental drift.
+
+\subsection{Leakage-Controlled Split and Audit}
+Because a replay window is copied from a window of its own scene, all four windows of a scene (its group) are assigned together to one split. Groups are shuffled with a seed-derived generator and split $382/68/150$ groups, giving $1{,}528/272/600$ windows with exactly balanced classes in every split. For every seed the code asserts, and records in a per-seed audit file, that (i) group sets are pairwise disjoint, (ii) every group's four windows lie in one split, and (iii) all 2,400 windows are byte-wise unique (SHA-256 of the raw array), so no identical window crosses a split. These checks do not exclude near-duplicates or generator-induced similarity across scenes. Normalisation statistics and classifier fitting use the training split only.
+
+\subsection{Models and Training}
+All models are evaluated on the same splits and seeds. \emph{SVM (mean/var).} A replication of the Wi-Alarm feature set~\cite{wang2019wialarm}: amplitude mean and variance, standardised, RBF kernel, $C=0.8$, $\gamma=20$. \emph{SVM (8 features)} and \emph{Random Forest (8 features)}: standardised RBF SVM with $C=0.8$ and $\gamma=$``scale'', and 200 trees of depth at most 8. \emph{CNN-BiLSTM-Attention:} Table~\ref{tab:cnn} (``paper'' variant), plus the smaller first-draft variant (48/64 filters, 48 hidden units, dropout 0.25) as a check. The CNN uses Adam (learning rate $10^{-3}$, weight decay $10^{-5}$), batch size 32, cross-entropy loss, and 40 epochs with no early stopping; the checkpoint with the lowest validation loss is evaluated. This protocol was fixed before the final runs, no hyperparameter was tuned on the test split, and the test split is used once per seed. Experiments use seeds $11,22,33,44,55$ and are reported as mean $\pm$ standard deviation over seeds.
+
+\subsection{Metrics}
+We report accuracy, macro precision, recall and F1, per-class recall, and the macro one-vs-rest AUC. For each class $c$ a binary problem (class $c$ versus the rest) is scored by the softmax or predicted probability $p(c\mid x)$ on the 600 test windows; ROC AUC is computed per class, and the macro value is the unweighted mean. AUC is a ranking metric and can be high even when the decision threshold misses most positives, so per-class recall is reported alongside it.
+
+%==================================================================
+\section{Results}
+\subsection{Classification Performance}
+Table~\ref{tab:perf} gives the test results. Feature-based models perform far better than the CNN: the Random Forest reaches $98.9\%$ accuracy and the 8-feature SVM $98.5\%$, while the CNN reaches $82.6\%$ (original smaller variant $82.5\%$) and the Wi-Alarm-style mean/variance SVM $61.9\%$. The CNN claim made in earlier drafts, namely superior accuracy over the baselines, is therefore not supported.
+
+\begin{table}[t]
+\caption{Test Performance, Mean $\pm$ Std over Five Seeds}
+\label{tab:perf}
+\centering
+\small
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lcccc}
+\toprule
+Model & Acc.\ (\%) & Macro F1 & OvR AUC & Replay rec. \\
+\midrule
+SVM, mean/var.\ & $61.9\pm1.6$ & $0.568\pm0.017$ & $0.829\pm0.008$ & $0.096\pm0.034$ \\
+SVM, 8 feat.\ & $98.5\pm0.4$ & $0.985\pm0.004$ & $0.999\pm0.000$ & $0.983\pm0.004$ \\
+Random Forest, 8 feat.\ & $98.9\pm0.5$ & $0.989\pm0.005$ & $1.000\pm0.000$ & $0.995\pm0.006$ \\
+CNN (smaller variant) & $82.5\pm1.2$ & $0.809\pm0.015$ & $0.945\pm0.007$ & $0.400\pm0.050$ \\
+CNN (Table~\ref{tab:cnn}) & $82.6\pm0.9$ & $0.811\pm0.010$ & $0.946\pm0.003$ & $0.407\pm0.034$ \\
+\bottomrule
+\end{tabular}
+\\[2pt]
+\footnotesize Macro-averaged F1 and AUC; ``Replay rec.'' is Replay/Spoof recall.
+\end{table}
+
+\subsection{Replay/Spoof Is the CNN's Failure Mode}
+Per-class results for the CNN (Table~\ref{tab:cnnclass}) show near-perfect Intrusion and Empty recall but only $40.7\%$ Replay/Spoof recall. Pooled over the five seeds (Table~\ref{tab:cm}), 391 of 750 replay windows are labelled Empty and 53 Benign. Replay misclassified as Empty is the worst outcome for the threat model considered here. The Random Forest misclassifies only 4 of 750 replay windows over the same seeds.
+
+\begin{table}[t]
+\caption{CNN Per-Class Recall and OvR AUC (Five Seeds)}
+\label{tab:cnnclass}
+\centering
+\small
+\begin{tabular}{lcc}
+\toprule
+Class & Recall & AUC \\
+\midrule
+Empty & $0.977\pm0.021$ & $0.913\pm0.005$ \\
+Benign & $0.931\pm0.021$ & $0.993\pm0.001$ \\
+Intrusion & $0.991\pm0.009$ & $0.999\pm0.001$ \\
+Replay/Spoof & $0.407\pm0.034$ & $0.879\pm0.006$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\caption{CNN Confusion Matrix Pooled over Five Seeds (3,000 Test Windows; Rows = True)}
+\label{tab:cm}
+\centering
+\small
+\begin{tabular}{lcccc}
+\toprule
+ & Empty & Benign & Intrusion & Replay \\
+\midrule
+Empty & 733 & 0 & 0 & 17 \\
+Benign & 4 & 698 & 7 & 41 \\
+Intrusion & 0 & 6 & 743 & 1 \\
+Replay/Spoof & 391 & 53 & 1 & 305 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Training Behaviour}
+The CNN does not appear to be limited by early stopping or by capacity. At the selected checkpoint (mean epoch 35) its training accuracy is only $85.8\pm0.5\%$, i.e.\ it underfits rather than overfits, and the smaller variant performs identically. A single-seed check with 150 epochs (seed 11, selection by validation loss) gave $83.0\%$ test accuracy and $39.3\%$ replay recall, so longer training alone did not resolve the weakness. We did not establish why the network fails; it may be input representation (amplitude-only, pooled convolutional features), optimisation, or the sample size of 1,528 training windows.
+
+\subsection{Why Simple Features Succeed: a Generator Diagnostic}
+Using only training and validation windows of seed 42 (the test split was not used), Table~\ref{tab:diag} reports single-feature AUCs for separating Replay/Spoof from each other class. The Doppler proxy separates replay from Empty perfectly (AUC $1.000$), and an additional loop-lag autocorrelation (maximum autocorrelation over lags 20--60 samples) separates it almost perfectly from every class. The Random Forest importances on these windows were highest for maximum excursion ($0.357$) and Doppler proxy ($0.325$), followed by mean correlation ($0.126$) and the fixed-lag periodicity ($0.117$). A perfect single-feature separation indicates that the synthetic replay class carries a distinctive signature. Candidate causes are the independent noise added to replay windows and the tiled-segment structure; we did not isolate which. Consequently, the high feature-based scores should be read as properties of this generator and not as evidence of real-world replay detection.
+
+\begin{table}[t]
+\caption{Single-Feature AUC for Replay vs.\ Other Classes (Seed 42, Train+Val)}
+\label{tab:diag}
+\centering
+\small
+\begin{tabular}{lccc}
+\toprule
+Feature & vs.\ Empty & vs.\ Benign & vs.\ Intrusion \\
+\midrule
+Doppler proxy & 1.000 & 0.941 & 0.903 \\
+Loop-lag autocorr.\ (20--60) & 1.000 & 0.941 & 0.998 \\
+Max.\ excursion & 0.870 & 0.854 & 1.000 \\
+Fixed-lag periodicity (100) & 0.579 & 0.564 & 0.882 \\
+Variance & 0.518 & 0.552 & 0.506 \\
+\bottomrule
+\end{tabular}
+\\[2pt]
+\footnotesize AUC taken as $\max(a,1-a)$, so 0.5 means no information.
+\end{table}
+
+\subsection{Noise Robustness}
+We added zero-mean Gaussian noise to the clean test amplitudes before applying the fixed trained CNN (Table~\ref{tab:noise}). Accuracy falls from $82.7\%$ at $\sigma=0.005$ to $69.5\%$ at $\sigma=0.25$. This tests the synthetic input only and is not a calibrated SNR study. Noise robustness of the feature-based models was not measured.
+
+\begin{table}[t]
+\caption{Noise Robustness of the CNN (Five Seeds)}
+\label{tab:noise}
+\centering
+\small
+\begin{tabular}{lcccccc}
+\toprule
+$\sigma$ & 0.005 & 0.03 & 0.06 & 0.12 & 0.18 & 0.25 \\
+\midrule
+Acc.\ (\%) & 82.7 & 82.7 & 82.2 & 80.2 & 75.0 & 69.5 \\
+Std. & 0.8 & 1.1 & 0.8 & 1.5 & 3.3 & 4.0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Ledger Tamper Test}
+We create a chain of five records, change the confidence of the third from 0.97 to 0.10 without recomputing later hashes, and re-verify. The unmodified chain passes and the modified chain is rejected with the first divergence at (zero-based) index 2. This confirms detection within the tested chain only.
+
+%==================================================================
+\section{Security Interpretation}
+Three bounded observations follow. First, on this benchmark engineered features, not the CNN, are the stronger classifiers, and the neural model's weakness is concentrated in replay, the attack the architecture is designed to address. Second, the near-perfect feature-based scores are explained at least in part by a generator signature rather than by a hard physical problem, so they should not be extrapolated. Third, the ledger detects modification of a stored record in a software test. We report no detection rates for label suppression, CSI fabrication, or challenge--response attacks.
+
+%==================================================================
+\section{Limitations}
+\textbf{Synthetic, amplitude-only data.} All results come from a surrogate generator without phase, AGC, CFO, phase noise, interference, or drift. \textbf{Replay generator.} Replay is a tiled segment with added noise, and the diagnostics suggest this is easy to detect; a replay adversary who smooths transitions, matches noise statistics, or resynthesises the channel is not modelled. A more realistic replay generator should be tested before drawing conclusions about replay detection. \textbf{Limited scene variety.} Scenes share one parametric family, one person-path model, and one room-independent noise level; multi-person, pet, and through-wall scenarios are absent. \textbf{CNN unexplained.} We did not diagnose the CNN's weakness, and the tested training regimes are limited. \textbf{Explainability not evaluated.} Earlier drafts reported Grad-CAM and SHAP findings; these were not reproduced and are removed. \textbf{Verifier not evaluated.} The challenge--response protocol requires a wireless testbed, calibration, and controlled attacks. \textbf{Ledger scope.} A hash chain does not stop an attacker controlling the full ledger from rebuilding a consistent chain; an external anchor is required. \textbf{Hardware validation.} Future work should use real CSI traces (e.g., Intel 5300, ESP32, or Nexmon-based platforms~\cite{gringoli2019}) across rooms, subjects, and days, with physical replay and adversarial attacks.
+
+%==================================================================
+\section{Conclusion}
+EchoForensics argues that sensing-pipeline integrity is a security concern alongside classification accuracy. In a leakage-audited, five-seed synthetic evaluation, a Random Forest and an SVM on eight engineered features reach $98.9\%$ and $98.5\%$ accuracy, while a CNN-BiLSTM-Attention model reaches $82.6\%$ with only $40.7\%$ Replay/Spoof recall; a diagnostic indicates the benchmark's replay class is easy to separate with simple features. The hash-chained ledger detects a targeted modification. These findings are a simulation-based proof of concept, not a field-validated guarantee, and the challenge--response verifier remains an unevaluated proposal. Future work will test a more realistic replay generator, diagnose the CNN's replay failure, and collect real CSI for physical replay and adversarial experiments.
+
+\section*{Reproducibility Statement}
+The generator, group-wise split with per-seed audit files, SVM, Random Forest and CNN training code, evaluation (including per-class AUC and confusion matrices), noise test, and ledger test are provided in a reference implementation. Experiments use seeds $11,22,33,44,55$, 40 epochs, and PyTorch with scikit-learn on CPU; exact software versions are saved in the run metadata. Repository: \tbd{repository URL}.
+
+\section*{Acknowledgment}
+The authors thank the Department of Computer Science and Engineering, Panimalar Engineering College, Chennai, India, for the research facilities and support.
+
+%==================================================================
+\begin{thebibliography}{99}
+\bibitem{halperin2011} D. Halperin, W. Hu, A. Sheth, and D. Wetherall, ``Tool release: Gathering 802.11n traces with channel state information,'' \emph{ACM SIGCOMM Comput. Commun. Rev.}, vol. 41, no. 1, p. 53, 2011.
+\bibitem{wang2014eeyes} Y. Wang, J. Liu, Y. Chen, M. Gruteser, J. Yang, and H. Liu, ``E-eyes: Device-free location-oriented activity identification using fine-grained WiFi signatures,'' in \emph{Proc. ACM MobiCom}, 2014, pp. 617--628.
+\bibitem{kotaru2015spotfi} M. Kotaru, K. Joshi, D. Bharadia, and S. Katti, ``SpotFi: Decimeter level localization using WiFi,'' in \emph{Proc. ACM SIGCOMM}, 2015, pp. 269--282.
+\bibitem{yousefi2017} S. Yousefi, H. Narui, S. Dayal, S. Ermon, and S. Valaee, ``A survey on behavior recognition using WiFi channel state information,'' \emph{IEEE Commun. Mag.}, vol. 55, no. 10, pp. 98--104, 2017.
+\bibitem{ma2019} Y. Ma, G. Zhou, and S. Wang, ``WiFi sensing with channel state information: A survey,'' \emph{ACM Comput. Surv.}, vol. 52, no. 3, Art. no. 46, 2019.
+\bibitem{qian2014pads} K. Qian, C. Wu, Z. Yang, Y. Liu, and Z. Zhou, ``PADS: Passive detection of moving targets with dynamic speed using PHY layer information,'' in \emph{Proc. IEEE ICPADS}, 2014, pp. 1--8.
+\bibitem{wang2019wialarm} T. Wang, D. Yang, S. Zhang, Y. Wu, and S. Xu, ``Wi-Alarm: Low-cost passive intrusion detection using WiFi,'' \emph{Sensors}, vol. 19, no. 10, Art. no. 2335, 2019.
+\bibitem{lundberg2017} S. M. Lundberg and S.-I. Lee, ``A unified approach to interpreting model predictions,'' in \emph{Adv. Neural Inf. Process. Syst.}, 2017, pp. 4765--4774.
+\bibitem{selvaraju2017} R. R. Selvaraju, M. Cogswell, A. Das, R. Vedantam, D. Parikh, and D. Batra, ``Grad-CAM: Visual explanations from deep networks via gradient-based localization,'' in \emph{Proc. IEEE ICCV}, 2017, pp. 618--626.
+\bibitem{lone2019} A. H. Lone and R. N. Mir, ``Forensic-chain: Blockchain based digital forensics chain of custody with PoC in Hyperledger Composer,'' \emph{Digital Investigation}, vol. 28, pp. 44--55, 2019.
+\bibitem{choudhary2023} A. Choudhary, ``Forensic investigations and computer forensics in the age of blockchain,'' \emph{ISACA Journal}, vol. 5, 2023. % VERIFY volume/issue
+\bibitem{rose2020zta} S. Rose, O. Borchert, S. Mitchell, and S. Connelly, ``Zero Trust Architecture,'' NIST Special Publication 800-207, 2020.
+\bibitem{dehmollaian2020} E. Dehmollaian, B. Etzlinger, N. Ballber Torres, and A. Springer, ``Using channel state information for physical tamper attack detection in OFDM systems: A deep learning approach,'' arXiv:2011.03573, 2020.
+\bibitem{basha2024} N. Basha, B. Hamdaoui, A. Erbad, and M. Guizani, ``On the detection of replay authentication attacks through channel state information analysis,'' in \emph{Proc. IEEE GLOBECOM}, 2024, pp. 1719--1724.
+\bibitem{lakshmanan2019surfi} N. Lakshmanan, I. Bang, M. S. Kang, J. Han, and J. T. Lee, ``SurFi: Detecting surveillance camera looping attacks with Wi-Fi channel state information,'' in \emph{Proc. ACM WiSec}, 2019, pp. 239--244.
+\bibitem{gopalakrishnan2025} S. K. Gopalakrishnan and S. Hailes, ``Towards trustworthy Wi-Fi CSI-based sensing: Systematic evaluation of adversarial robustness,'' arXiv:2511.20456, 2025.
+\bibitem{duan2026wiid} Y.-R. Duan, S. Yang, H.-Y. Zhai, X.-Y. Wang, J.-S. Tan, Y.-S. Luo, and S. Chen, ``WiIID: Wi-Fi based intelligent indoor intrusion detection with tensor decomposition,'' \emph{IEEE Wireless Commun. Lett.}, vol. 15, pp. 146--150, 2026.
+\bibitem{xu2022wicam} L. Xu, X. Zheng, X. Li, Y. Zhang, L. Liu, and H. Ma, ``WiCAM: Imperceptible adversarial attack on deep learning based WiFi sensing,'' in \emph{Proc. IEEE SECON}, 2022, pp. 10--18.
+\bibitem{liu2024time} J. Liu, Y. He, C. Xiao, J. Han, and K. Ren, ``Time to think the security of WiFi-based behavior recognition systems,'' \emph{IEEE Trans. Dependable Secure Comput.}, vol. 21, no. 1, pp. 449--462, 2024.
+\bibitem{chen2018ablstm} Z. Chen, L. Zhang, C. Jiang, Z. Cao, and W. Cui, ``WiFi CSI based passive human activity recognition using attention based BLSTM,'' \emph{IEEE Trans. Mobile Comput.}, vol. 18, no. 11, pp. 2714--2724, 2019.
+\bibitem{hernandez2020} S. M. Hernandez and E. Bulut, ``Performing WiFi sensing with off-the-shelf smartphones,'' in \emph{Proc. IEEE PerCom Workshops}, 2020, p. 393.
+\bibitem{schneier1999} B. Schneier and J. Kelsey, ``Secure audit logs to support computer forensics,'' \emph{ACM Trans. Inf. Syst. Secur.}, vol. 2, no. 2, pp. 159--176, 1999.
+\bibitem{syed2022zta} N. F. Syed, S. W. Shah, A. Shaghaghi, A. Anwar, Z. Baig, and R. Doss, ``Zero Trust Architecture (ZTA): A comprehensive survey,'' \emph{IEEE Access}, vol. 10, pp. 57143--57179, 2022.
+\bibitem{gringoli2019} F. Gringoli, M. Schulz, J. Link, and M. Hollick, ``Free your CSI: A channel state information extraction platform for modern Wi-Fi chipsets,'' in \emph{Proc. ACM WiNTECH}, 2019, pp. 21--28.
+\bibitem{li2017aralarm} S. Li, X. Li, K. Niu, H. Wang, Y. Zhang, and D. Zhang, ``AR-Alarm: An adaptive and robust intrusion detection system leveraging CSI from commodity Wi-Fi,'' in \emph{Enhanced Quality of Life and Smart Living (ICOST)}. Springer, 2017, pp. 211--223.
+\end{thebibliography}
+
+\end{document}
