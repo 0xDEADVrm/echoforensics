@@ -61,22 +61,18 @@ Prabusank.r1985@gmail.com}
 \maketitle
 
 \begin{abstract}
-Wi-Fi Channel State Information (CSI) allows physical activity to be sensed without a device carried by the observed person. Sensing pipelines, however, usually assume that the node and software that produce CSI are trustworthy. A compromised edge node could replay recorded benign measurements, alter CSI, suppress an alarm, or modify stored evidence while the classifier appears to work normally. EchoForensics treats measurement integrity as a separate security problem from classification. We specify a zero-trust architecture with an independent verifier (phase, spectral, temporal, and challenge--response consistency checks), a classifier, and a SHA-256 hash-chained evidence ledger.
-
-We evaluate the classification and ledger components on a synthetic four-class benchmark (Empty, Benign, Intrusion, Replay/Spoof) with a group-wise, leakage-audited split, five random seeds, and a protocol fixed before the final runs. Feature-based models separate the classes well: a Random Forest on eight engineered features reaches $98.9\pm0.5\%$ accuracy and an SVM on the same features $98.5\pm0.4\%$. A CNN-BiLSTM-Attention model reaches only $82.6\pm0.9\%$ accuracy (macro one-vs-rest AUC $0.946$) and recovers just $40.7\pm3.4\%$ of Replay/Spoof windows, the very attack class motivating this work. A single engineered feature separates replay from empty windows perfectly in our diagnostics, which suggests that the synthetic replay generator contains an easily exploitable signature; we therefore do not claim real-world replay-detection capability. The hash chain detects and localises a modified record in a software test. The challenge--response verifier is an architectural proposal and is not evaluated.
-
-These results are a controlled simulation study, not evidence of field-level security.
+Wi-Fi Channel State Information (CSI) enables device-free activity sensing, but does not by itself guarantee the integrity of measurements or stored evidence. EchoForensics proposes a zero-trust architecture comprising a physical-consistency verifier, an activity classifier, and a SHA-256 hash-chained evidence ledger. We evaluate the classification and ledger components using a synthetic four-class amplitude-only benchmark, group-wise splitting, and five random seeds. The Random Forest using eight engineered features achieves $98.87\pm0.48\%$ accuracy, and the RBF Support Vector Machine achieves $98.47\pm0.41\%$. The CNN--BiLSTM--Attention model achieves $81.47\pm1.07\%$ accuracy. An ablation study shows that removing the temporal-difference feature reduces feature-based model performance, indicating sensitivity to the synthetic replay-generation process. A software test confirms that the hash chain detects a targeted record modification when subsequent hashes are not recomputed. The proposed challenge--response verifier has not been implemented or experimentally evaluated. These results are limited to synthetic data and a software integrity test; they do not establish physical intrusion-detection performance. Evaluation with real Wi-Fi CSI and realistic replay attacks remains future work.
 \end{abstract}
 
 \begin{IEEEkeywords}
-Wi-Fi sensing, channel state information, zero-trust architecture, physical intrusion detection, replay detection, digital forensics, tamper-evident logging.
+Wi-Fi sensing, Channel State Information, physical intrusion detection, replay detection, tamper-evident logging
 \end{IEEEkeywords}
 
 %==================================================================
 \section{Introduction}
 Wi-Fi signals change as they propagate through objects and people. Channel State Information (CSI) captures part of this change at fine granularity, enabling activity inference without an on-body sensor. Tools for extracting CSI from commodity 802.11n hardware, notably the Intel 5300 toolchain~\cite{halperin2011}, led to work on activity recognition, localization, and motion sensing~\cite{wang2014eeyes,kotaru2015spotfi,yousefi2017,ma2019}. Security monitoring followed: PADS and Wi-Alarm showed that wireless measurements can identify moving targets and flag intrusions~\cite{qian2014pads,wang2019wialarm}, and AR-Alarm improved adaptivity and robustness~\cite{li2017aralarm}.
 
-There is a difference between detecting an event and knowing that the measurement used to detect it is genuine. CSI passes through several software stages before an alert or evidence record is produced, and their integrity is usually treated as an implementation detail. A compromised node could (i) replay an earlier benign CSI segment during an intrusion; (ii) modify amplitude or phase values; (iii) overwrite the classifier output; or (iv) edit records in the local evidence store. A more accurate classifier does not close this gap, so the security boundary must extend to the measurements, the processing path, and the derived evidence. This motivates a second question beyond ``what is happening?'': ``why should this observation be trusted?''
+There is a difference between detecting an event and knowing that the measurement used to detect it is genuine. CSI passes through several software stages before an alert or evidence record is produced, and their integrity is usually treated as an implementation detail. A compromised node could (i) replay an earlier benign CSI segment during an intrusion; (ii) modify amplitude or phase values; (iii) overwrite the classifier output; or (iv) edit records in the local evidence store. A more accurate classifier does not close this gap, so the security boundary must extend to the measurements, the processing path, and the derived evidence. This gap motivates a framework that treats measurement integrity, classification reliability, and evidence preservation as separate but interconnected security requirements.
 
 Existing CSI intrusion-detection work focuses on sensing accuracy~\cite{qian2014pads,wang2019wialarm,li2017aralarm}. Work on security problems in CSI itself addresses single issues such as physical tampering, replay, camera looping, or adversarial perturbation~\cite{dehmollaian2020,basha2024,lakshmanan2019surfi,gopalakrishnan2025,xu2022wicam,liu2024time}. EchoForensics instead considers the whole pipeline---observation, decision, and stored evidence---as the object of verification, applying the zero-trust principle~\cite{rose2020zta,syed2022zta} to physical sensing.
 
@@ -130,12 +126,12 @@ A Wi-Fi transmitter and receiver provide CSI for activity inference. The wireles
 \label{tab:attacks}
 \centering
 \small
-\begin{tabular}{p{1.6cm}p{1.5cm}p{4.2cm}}
+\begin{tabular}{p{1.45cm}p{1.35cm}p{4.0cm}}
 \toprule
 Attack & Target & Goal \\
 \midrule
 Label suppression & Local classifier & Force an Empty or Benign output regardless of the physical state \\
-Replay/Spoofing & CSI pipeline & Substitute a previously recorded benign segment for the live measurement \\
+\shortstack[l]{Replay/\\Spoofing} & CSI pipeline & Substitute a previously recorded benign segment for the live measurement \\
 CSI fabrication & Raw CSI values & Modify amplitude or phase to imitate a different physical state \\
 Evidence modification & Local ledger & Alter or delete stored records before independent verification \\
 \bottomrule
@@ -181,7 +177,7 @@ H(f_i,t)=\sum_{k} a_k(t)\,\exp\!\big(-j2\pi f_i \tau_k(t)\big)+n(t),
 with complex path gains $a_k(t)$, delays $\tau_k(t)$, and complex Gaussian noise $n(t)$; a human-induced path has bistatic delay $\tau_h(t)=\big(d_{Tx,h}(t)+d_{h,Rx}(t)\big)/c$. Our experiments do \emph{not} implement this model literally. They use a simplified amplitude-only surrogate (Section~V-A), so no phase information is simulated or used.
 
 \subsection{Classifiers}
-\emph{Engineered features.} Eight scalar features per window: amplitude mean, variance, skewness, excess kurtosis, mean inter-subcarrier correlation, a Doppler proxy (mean absolute first difference over time), a periodicity score (mean per-subcarrier autocorrelation at a fixed lag of 100 samples), and the maximum per-subcarrier amplitude excursion. \emph{CNN-BiLSTM-Attention.} The input is the $30\times200$ amplitude window with per-subcarrier z-scoring using training-set statistics only. Table~\ref{tab:cnn} gives the architecture (117,701 trainable parameters).
+\emph{Engineered features.} Eight scalar features per window: amplitude mean, variance, skewness, excess kurtosis, mean inter-subcarrier correlation, a Doppler proxy (mean absolute first difference over time), a periodicity score (mean per-subcarrier autocorrelation at a fixed lag of 100 samples), and the maximum per-subcarrier amplitude excursion. \emph{CNN-BiLSTM-Attention.} The input is the $30\times200$ amplitude window with per-subcarrier z-scoring using training-set statistics only. Table~\ref{tab:cnn} gives the architecture used in the reported experiments.
 
 \begin{table}[t]
 \caption{CNN-BiLSTM-Attention Configuration}
@@ -193,10 +189,10 @@ with complex path gains $a_k(t)$, delays $\tau_k(t)$, and complex Gaussian noise
 Layer & Configuration \\
 \midrule
 Input & 30 subcarrier channels $\times$ 200 time samples \\
-Conv1D $\times$2 & 64 filters each; kernel sizes 7 and 5; batch norm; ReLU; max pooling (2) \\
-BiLSTM & 64 hidden units per direction \\
+Conv1D $\times$2 & 48 then 64 filters; kernel sizes 7 and 5; batch norm; ReLU; max pooling (2) \\
+BiLSTM & 48 hidden units per direction \\
 Attention & Additive temporal attention \\
-Dense head & Two FC layers (64 hidden); dropout 0.3 \\
+Dense head & 48-unit hidden layer; ReLU; dropout 0.25 \\
 Output & Four-class softmax \\
 \bottomrule
 \end{tabular}
@@ -231,7 +227,7 @@ The result is 2,400 windows (600 per class). The simulator omits AGC variation, 
 Because a replay window is copied from a window of its own scene, all four windows of a scene (its group) are assigned together to one split. Groups are shuffled with a seed-derived generator and split $382/68/150$ groups, giving $1{,}528/272/600$ windows with exactly balanced classes in every split. For every seed the code asserts, and records in a per-seed audit file, that (i) group sets are pairwise disjoint, (ii) every group's four windows lie in one split, and (iii) all 2,400 windows are byte-wise unique (SHA-256 of the raw array), so no identical window crosses a split. These checks do not exclude near-duplicates or generator-induced similarity across scenes. Normalisation statistics and classifier fitting use the training split only.
 
 \subsection{Models and Training}
-All models are evaluated on the same splits and seeds. \emph{SVM (mean/var).} A replication of the Wi-Alarm feature set~\cite{wang2019wialarm}: amplitude mean and variance, standardised, RBF kernel, $C=0.8$, $\gamma=20$. \emph{SVM (8 features)} and \emph{Random Forest (8 features)}: standardised RBF SVM with $C=0.8$ and $\gamma=$``scale'', and 200 trees of depth at most 8. \emph{CNN-BiLSTM-Attention:} Table~\ref{tab:cnn} (``paper'' variant), plus the smaller first-draft variant (48/64 filters, 48 hidden units, dropout 0.25) as a check. The CNN uses Adam (learning rate $10^{-3}$, weight decay $10^{-5}$), batch size 32, cross-entropy loss, and 40 epochs with no early stopping; the checkpoint with the lowest validation loss is evaluated. This protocol was fixed before the final runs, no hyperparameter was tuned on the test split, and the test split is used once per seed. Experiments use seeds $11,22,33,44,55$ and are reported as mean $\pm$ standard deviation over seeds.
+All models are evaluated on the same splits and seeds. \emph{SVM (mean/var).} A replication of the Wi-Alarm feature set~\cite{wang2019wialarm}: amplitude mean and variance, standardised, RBF kernel, $C=0.8$, $\gamma=20$. \emph{SVM (8 features)} and \emph{Random Forest (8 features)}: standardised RBF SVM with $C=0.8$ and $\gamma=$``scale'', and 200 trees of depth at most 8. \emph{CNN-BiLSTM-Attention:} the architecture specified in Table~\ref{tab:cnn}. The CNN uses Adam (learning rate $10^{-3}$, weight decay $10^{-5}$), batch size 32, cross-entropy loss, and up to 30 epochs with early stopping based on validation loss (patience of 7 epochs); the checkpoint with the lowest validation loss is evaluated. This protocol was fixed before the final runs, no hyperparameter was tuned on the test split, and the test split is used once per seed. Experiments use seeds $11,22,33,44,55$ and are reported as mean $\pm$ standard deviation over seeds.
 
 \subsection{Metrics}
 We report accuracy, macro precision, recall and F1, per-class recall, and the macro one-vs-rest AUC. For each class $c$ a binary problem (class $c$ versus the rest) is scored by the softmax or predicted probability $p(c\mid x)$ on the 600 test windows; ROC AUC is computed per class, and the macro value is the unweighted mean. AUC is a ranking metric and can be high even when the decision threshold misses most positives, so per-class recall is reported alongside it.
@@ -239,106 +235,109 @@ We report accuracy, macro precision, recall and F1, per-class recall, and the ma
 %==================================================================
 \section{Results}
 \subsection{Classification Performance}
-Table~\ref{tab:perf} gives the test results. Feature-based models perform far better than the CNN: the Random Forest reaches $98.9\%$ accuracy and the 8-feature SVM $98.5\%$, while the CNN reaches $82.6\%$ (original smaller variant $82.5\%$) and the Wi-Alarm-style mean/variance SVM $61.9\%$. The CNN claim made in earlier drafts, namely superior accuracy over the baselines, is therefore not supported.
+The five-seed results from the reference implementation are summarised in Table~\ref{tab:perf}. The Random Forest achieves the highest accuracy ($98.87\pm0.48\%$), followed by the RBF SVM ($98.47\pm0.41\%$). The CNN--BiLSTM--Attention model reaches $81.47\pm1.07\%$ accuracy and a macro F1 of $0.7984\pm0.0163$. These results are from the current synthetic benchmark implementation and should not be interpreted as physical Wi-Fi intrusion-detection performance.
 
 \begin{table}[t]
-\caption{Test Performance, Mean $\pm$ Std over Five Seeds}
+\caption{Classification Performance on the Synthetic Test Split (Mean $\pm$ Standard Deviation over Five Seeds)}
 \label{tab:perf}
 \centering
-\small
-\setlength{\tabcolsep}{3pt}
-\begin{tabular}{lcccc}
+\footnotesize
+\setlength{\tabcolsep}{2pt}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{@{}lccc@{}}
 \toprule
-Model & Acc.\ (\%) & Macro F1 & OvR AUC & Replay rec. \\
+Model & Accuracy (\%) & Macro F1 & Macro OvR AUC \\
 \midrule
-SVM, mean/var.\ & $61.9\pm1.6$ & $0.568\pm0.017$ & $0.829\pm0.008$ & $0.096\pm0.034$ \\
-SVM, 8 feat.\ & $98.5\pm0.4$ & $0.985\pm0.004$ & $0.999\pm0.000$ & $0.983\pm0.004$ \\
-Random Forest, 8 feat.\ & $98.9\pm0.5$ & $0.989\pm0.005$ & $1.000\pm0.000$ & $0.995\pm0.006$ \\
-CNN (smaller variant) & $82.5\pm1.2$ & $0.809\pm0.015$ & $0.945\pm0.007$ & $0.400\pm0.050$ \\
-CNN (Table~\ref{tab:cnn}) & $82.6\pm0.9$ & $0.811\pm0.010$ & $0.946\pm0.003$ & $0.407\pm0.034$ \\
+RBF SVM, 8 features & $98.47\pm0.41$ & $0.9847\pm0.0041$ & $0.99940\pm0.00036$ \\
+Random Forest, 8 features & $98.87\pm0.48$ & $0.9887\pm0.0048$ & $0.99959\pm0.00030$ \\
+CNN--BiLSTM--Attention & $81.47\pm1.07$ & $0.7984\pm0.0163$ & $0.94089\pm0.00660$ \\
 \bottomrule
 \end{tabular}
-\\[2pt]
-\footnotesize Macro-averaged F1 and AUC; ``Replay rec.'' is Replay/Spoof recall.
+}
+\par\smallskip
+\footnotesize AUC denotes the macro one-vs-rest area under the ROC curve.
 \end{table}
 
-\subsection{Replay/Spoof Is the CNN's Failure Mode}
-Per-class results for the CNN (Table~\ref{tab:cnnclass}) show near-perfect Intrusion and Empty recall but only $40.7\%$ Replay/Spoof recall. Pooled over the five seeds (Table~\ref{tab:cm}), 391 of 750 replay windows are labelled Empty and 53 Benign. Replay misclassified as Empty is the worst outcome for the threat model considered here. The Random Forest misclassifies only 4 of 750 replay windows over the same seeds.
+\subsection{Replay/Spoof Performance in the CNN}
+The seed-11 classification report provides a per-class diagnostic rather than a five-seed estimate. On its 600-window test split, the CNN obtains $80.5\%$ accuracy and a macro F1 of $0.7874$. Replay/Spoof recall is $36.0\%$ (54 of 150 windows): 86 replay windows are classified as Empty and 10 as Benign. By comparison, Empty recall is $99.3\%$, Benign recall is $88.7\%$, and Intrusion recall is $98.0\%$. These seed-specific results illustrate a replay-class weakness but should not be generalized as five-seed per-class estimates.
 
 \begin{table}[t]
-\caption{CNN Per-Class Recall and OvR AUC (Five Seeds)}
+\caption{CNN Per-Class Results for Seed 11}
 \label{tab:cnnclass}
 \centering
 \small
-\begin{tabular}{lcc}
+\begin{tabular}{lccc}
 \toprule
-Class & Recall & AUC \\
+Class & Precision & Recall & F1 \\
 \midrule
-Empty & $0.977\pm0.021$ & $0.913\pm0.005$ \\
-Benign & $0.931\pm0.021$ & $0.993\pm0.001$ \\
-Intrusion & $0.991\pm0.009$ & $0.999\pm0.001$ \\
-Replay/Spoof & $0.407\pm0.034$ & $0.879\pm0.006$ \\
+Empty & 0.629 & 0.993 & 0.770 \\
+Benign & 0.911 & 0.887 & 0.899 \\
+Intrusion & 1.000 & 0.980 & 0.990 \\
+Replay/Spoof & 0.771 & 0.360 & 0.491 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \begin{table}[t]
-\caption{CNN Confusion Matrix Pooled over Five Seeds (3,000 Test Windows; Rows = True)}
+\caption{CNN Confusion Matrix for Seed 11 (600 Test Windows; Rows = True)}
 \label{tab:cm}
 \centering
 \small
 \begin{tabular}{lcccc}
 \toprule
- & Empty & Benign & Intrusion & Replay \\
+ & Empty & Benign & Intrusion & Replay/Spoof \\
 \midrule
-Empty & 733 & 0 & 0 & 17 \\
-Benign & 4 & 698 & 7 & 41 \\
-Intrusion & 0 & 6 & 743 & 1 \\
-Replay/Spoof & 391 & 53 & 1 & 305 \\
+Empty & 149 & 0 & 0 & 1 \\
+Benign & 2 & 133 & 0 & 15 \\
+Intrusion & 0 & 3 & 147 & 0 \\
+Replay/Spoof & 86 & 10 & 0 & 54 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \subsection{Training Behaviour}
-The CNN does not appear to be limited by early stopping or by capacity. At the selected checkpoint (mean epoch 35) its training accuracy is only $85.8\pm0.5\%$, i.e.\ it underfits rather than overfits, and the smaller variant performs identically. A single-seed check with 150 epochs (seed 11, selection by validation loss) gave $83.0\%$ test accuracy and $39.3\%$ replay recall, so longer training alone did not resolve the weakness. We did not establish why the network fails; it may be input representation (amplitude-only, pooled convolutional features), optimisation, or the sample size of 1,528 training windows.
+The CNN--BiLSTM--Attention model achieves a mean test accuracy of $81.47\pm1.07\%$ and macro F1 of $0.7984\pm0.0163$ over five seeds. Training uses early stopping based on validation loss, with a maximum of 30 epochs. The current experiment outputs do not establish whether the observed performance is caused by underfitting, optimisation, model capacity, or the amplitude-only input representation; these explanations require controlled follow-up experiments.
 
-\subsection{Why Simple Features Succeed: a Generator Diagnostic}
-Using only training and validation windows of seed 42 (the test split was not used), Table~\ref{tab:diag} reports single-feature AUCs for separating Replay/Spoof from each other class. The Doppler proxy separates replay from Empty perfectly (AUC $1.000$), and an additional loop-lag autocorrelation (maximum autocorrelation over lags 20--60 samples) separates it almost perfectly from every class. The Random Forest importances on these windows were highest for maximum excursion ($0.357$) and Doppler proxy ($0.325$), followed by mean correlation ($0.126$) and the fixed-lag periodicity ($0.117$). A perfect single-feature separation indicates that the synthetic replay class carries a distinctive signature. Candidate causes are the independent noise added to replay windows and the tiled-segment structure; we did not isolate which. Consequently, the high feature-based scores should be read as properties of this generator and not as evidence of real-world replay detection.
+\subsection{Temporal-Difference Feature Diagnostic}
+The synthetic replay generator constructs replay windows by tiling a short segment and adding noise. Across seeds 11, 22, 33, 44, and 55, the temporal-difference feature (mean absolute first difference over time) has a Replay/Spoof-versus-Empty AUC of approximately $1.000$ in the diagnostic analysis. This feature is a proxy derived from synthetic amplitude sequences, not a direct physical Doppler measurement. The result suggests that the generator may introduce a class-specific temporal signature; it does not establish that physical replay attacks are similarly separable.
+
+\subsection{Feature Ablation}
+To quantify the contribution of the temporal-difference feature, we reran the feature-based models with all eight features and with that feature removed, using the same five seeds and group-wise split procedure. Table~\ref{tab:ablation} shows a substantial performance reduction when the feature is removed. For the Random Forest, mean accuracy decreases from $98.87\pm0.48\%$ to $82.90\pm1.47\%$, while Replay/Spoof recall decreases from $99.47\pm0.56\%$ to $48.67\pm4.83\%$. For the RBF SVM, accuracy decreases from $98.47\pm0.41\%$ to $77.57\pm0.78\%$. This sensitivity supports treating the high scores as generator-dependent results rather than evidence of robust physical replay detection.
 
 \begin{table}[t]
-\caption{Single-Feature AUC for Replay vs.\ Other Classes (Seed 42, Train+Val)}
-\label{tab:diag}
+\caption{Five-Seed Feature Ablation Results (Mean $\pm$ Standard Deviation)}
+\label{tab:ablation}
 \centering
-\small
-\begin{tabular}{lccc}
+\scriptsize
+\setlength{\tabcolsep}{2pt}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{@{}llccc@{}}
 \toprule
-Feature & vs.\ Empty & vs.\ Benign & vs.\ Intrusion \\
+Feature set & Model & Accuracy (\%) & Macro F1 & Replay recall (\%) \\
 \midrule
-Doppler proxy & 1.000 & 0.941 & 0.903 \\
-Loop-lag autocorr.\ (20--60) & 1.000 & 0.941 & 0.998 \\
-Max.\ excursion & 0.870 & 0.854 & 1.000 \\
-Fixed-lag periodicity (100) & 0.579 & 0.564 & 0.882 \\
-Variance & 0.518 & 0.552 & 0.506 \\
+All 8 features & Random Forest & $98.87\pm0.48$ & $0.9887\pm0.0048$ & $99.47\pm0.56$ \\
+Without temporal difference & Random Forest & $82.90\pm1.47$ & $0.8177\pm0.0163$ & $48.67\pm4.83$ \\
+All 8 features & RBF SVM & $98.47\pm0.41$ & $0.9847\pm0.0041$ & $98.27\pm0.37$ \\
+Without temporal difference & RBF SVM & $77.57\pm0.78$ & $0.7442\pm0.0107$ & $26.67\pm3.20$ \\
 \bottomrule
 \end{tabular}
-\\[2pt]
-\footnotesize AUC taken as $\max(a,1-a)$, so 0.5 means no information.
+}
 \end{table}
 
-\subsection{Noise Robustness}
-We added zero-mean Gaussian noise to the clean test amplitudes before applying the fixed trained CNN (Table~\ref{tab:noise}). Accuracy falls from $82.7\%$ at $\sigma=0.005$ to $69.5\%$ at $\sigma=0.25$. This tests the synthetic input only and is not a calibrated SNR study. Noise robustness of the feature-based models was not measured.
+\subsection{Synthetic Noise Robustness}
+We evaluated the trained CNN on the seed-11 synthetic test inputs after adding zero-mean Gaussian noise at several amplitudes. Table~\ref{tab:noise} reports this single-seed diagnostic. Accuracy decreases from $80.50\%$ at $\sigma=0.005$ to $74.50\%$ at $\sigma=0.25$. Because these perturbations are applied to synthetic amplitudes, the experiment is not a calibrated signal-to-noise ratio study and does not establish robustness on physical CSI. Feature-based model robustness was not evaluated in this experiment.
 
 \begin{table}[t]
-\caption{Noise Robustness of the CNN (Five Seeds)}
+\caption{CNN Noise Robustness on the Synthetic Test Split (Seed 11)}
 \label{tab:noise}
 \centering
-\small
-\begin{tabular}{lcccccc}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}lcccccc@{}}
 \toprule
-$\sigma$ & 0.005 & 0.03 & 0.06 & 0.12 & 0.18 & 0.25 \\
+Noise $\sigma$ & 0.005 & 0.03 & 0.06 & 0.12 & 0.18 & 0.25 \\
 \midrule
-Acc.\ (\%) & 82.7 & 82.7 & 82.2 & 80.2 & 75.0 & 69.5 \\
-Std. & 0.8 & 1.1 & 0.8 & 1.5 & 3.3 & 4.0 \\
+Accuracy (\%) & 80.50 & 80.17 & 80.33 & 79.50 & 78.17 & 74.50 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -348,18 +347,27 @@ We create a chain of five records, change the confidence of the third from 0.97 
 
 %==================================================================
 \section{Security Interpretation}
-Three bounded observations follow. First, on this benchmark engineered features, not the CNN, are the stronger classifiers, and the neural model's weakness is concentrated in replay, the attack the architecture is designed to address. Second, the near-perfect feature-based scores are explained at least in part by a generator signature rather than by a hard physical problem, so they should not be extrapolated. Third, the ledger detects modification of a stored record in a software test. We report no detection rates for label suppression, CSI fabrication, or challenge--response attacks.
+The results support three limited conclusions. First, on this synthetic benchmark, the Random Forest and RBF SVM using engineered features outperform the CNN--BiLSTM--Attention model. Second, the ablation study shows that removing the temporal-difference feature substantially reduces feature-model performance, indicating strong dependence on a generator-sensitive feature rather than demonstrating robust physical replay detection. Third, the hash-chain software test detects a targeted modification to a stored record when subsequent hashes are not recomputed. The experiments do not establish protection against complete chain reconstruction, label suppression, fabricated CSI, or challenge--response attacks. Real-device CSI collection and physical replay testing remain necessary.
 
 %==================================================================
 \section{Limitations}
-\textbf{Synthetic, amplitude-only data.} All results come from a surrogate generator without phase, AGC, CFO, phase noise, interference, or drift. \textbf{Replay generator.} Replay is a tiled segment with added noise, and the diagnostics suggest this is easy to detect; a replay adversary who smooths transitions, matches noise statistics, or resynthesises the channel is not modelled. A more realistic replay generator should be tested before drawing conclusions about replay detection. \textbf{Limited scene variety.} Scenes share one parametric family, one person-path model, and one room-independent noise level; multi-person, pet, and through-wall scenarios are absent. \textbf{CNN unexplained.} We did not diagnose the CNN's weakness, and the tested training regimes are limited. \textbf{Explainability not evaluated.} Earlier drafts reported Grad-CAM and SHAP findings; these were not reproduced and are removed. \textbf{Verifier not evaluated.} The challenge--response protocol requires a wireless testbed, calibration, and controlled attacks. \textbf{Ledger scope.} A hash chain does not stop an attacker controlling the full ledger from rebuilding a consistent chain; an external anchor is required. \textbf{Hardware validation.} Future work should use real CSI traces (e.g., Intel 5300, ESP32, or Nexmon-based platforms~\cite{gringoli2019}) across rooms, subjects, and days, with physical replay and adversarial attacks.
+\textbf{Synthetic, amplitude-only data.} All results come from a surrogate generator without phase, automatic gain control (AGC), carrier frequency offset (CFO), phase noise, interference, or environmental drift.
 
-%==================================================================
+\textbf{Replay generator and scene variety.} Replay is simulated by tiling a segment and adding noise. The diagnostic suggests that this construction is relatively easy to distinguish. More realistic replay attacks that smooth transitions, match noise statistics, or resynthesise the channel have not been modelled. The scenes also share one parametric family, one person-path model, and one room-independent noise level; multi-person, pet, and through-wall scenarios are absent.
+
+\textbf{CNN performance and explainability.} The cause of the CNN's weak performance has not been established, and the training regimes evaluated are limited. Grad-CAM and SHAP results from earlier drafts were not reproduced and are not claimed in this paper.
+
+\textbf{Verifier not evaluated.} The challenge--response protocol remains a proposal. Its evaluation requires a wireless testbed, calibration, and controlled attacks.
+
+\textbf{Ledger security scope.} A hash chain detects modifications that break the verified chain, but an attacker controlling the entire ledger could rebuild a consistent chain. An independently maintained external anchor is required for stronger protection.
+
+\textbf{Hardware validation.} Future work should evaluate real CSI traces from platforms such as Intel 5300, ESP32, or Nexmon-based systems~\cite{gringoli2019} across rooms, subjects, and days, including physical replay and adversarial attacks.
+
 \section{Conclusion}
-EchoForensics argues that sensing-pipeline integrity is a security concern alongside classification accuracy. In a leakage-audited, five-seed synthetic evaluation, a Random Forest and an SVM on eight engineered features reach $98.9\%$ and $98.5\%$ accuracy, while a CNN-BiLSTM-Attention model reaches $82.6\%$ with only $40.7\%$ Replay/Spoof recall; a diagnostic indicates the benchmark's replay class is easy to separate with simple features. The hash-chained ledger detects a targeted modification. These findings are a simulation-based proof of concept, not a field-validated guarantee, and the challenge--response verifier remains an unevaluated proposal. Future work will test a more realistic replay generator, diagnose the CNN's replay failure, and collect real CSI for physical replay and adversarial experiments.
+This study presents EchoForensics as a proposed zero-trust framework for Wi-Fi CSI-based physical intrusion detection and tamper-evident evidence handling. In the current five-seed synthetic benchmark, the Random Forest achieves $98.87\pm0.48\%$ accuracy and the RBF SVM achieves $98.47\pm0.41\%$, while the CNN--BiLSTM--Attention model achieves $81.47\pm1.07\%$. Feature ablation shows that removing the temporal-difference feature substantially reduces the performance of the feature-based classifiers, highlighting a dependency on the synthetic replay-generation process. The hash-chain demonstration detects a targeted record modification when subsequent hashes are not recomputed. These findings are limited to a synthetic amplitude-only benchmark and a software integrity test; they do not establish real-world intrusion-detection performance or evaluate the proposed challenge--response verifier. Future work will require realistic replay generation, physical Wi-Fi CSI collection, controlled adversarial testing, and independent evidence anchoring.
 
 \section*{Reproducibility Statement}
-The generator, group-wise split with per-seed audit files, SVM, Random Forest and CNN training code, evaluation (including per-class AUC and confusion matrices), noise test, and ledger test are provided in a reference implementation. Experiments use seeds $11,22,33,44,55$, 40 epochs, and PyTorch with scikit-learn on CPU; exact software versions are saved in the run metadata. Repository: \tbd{repository URL}.
+The synthetic benchmark and the experimental setup are described in this paper. The reported results were obtained using five random seeds (11, 22, 33, 44, and 55). The public reference implementation is available at \url{https://github.com/0xDEADVrm/echoforensics}. The repository should be consulted alongside the manuscript; exact reproducibility requires the published code, configuration, and saved outputs to match the experimental settings reported here. The challenge--response verifier has not been implemented or experimentally evaluated.
 
 \section*{Acknowledgment}
 The authors thank the Department of Computer Science and Engineering, Panimalar Engineering College, Chennai, India, for the research facilities and support.

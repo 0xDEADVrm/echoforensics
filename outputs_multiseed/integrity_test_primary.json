@@ -1,0 +1,8 @@
+{
+  "records": 5,
+  "valid_chain_passes": true,
+  "valid_chain_error_index": null,
+  "tampered_chain_rejected": true,
+  "first_detected_index_zero_based": 2,
+  "note": "Demonstration only; no external timestamping or key management."
+}

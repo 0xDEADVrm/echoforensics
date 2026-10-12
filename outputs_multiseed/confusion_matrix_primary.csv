@@ -1,0 +1,5 @@
+,Empty,Benign,Intrusion,Replay/Spoof
+Empty,149,0,0,1
+Benign,2,133,0,15
+Intrusion,0,3,147,0
+Replay/Spoof,86,10,0,54
